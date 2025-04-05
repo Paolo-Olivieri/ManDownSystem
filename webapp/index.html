@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="manifest" href="/mandown_webapp/manifest.json">
+    <link rel="apple-touch-icon" href="/mandown_webapp/icons/icon-192x192.png">
+    <title>Man Down Monitor</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            transition: background-color 0.3s;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        #resetAlarmBtn {
+            background-color: #dc3545;
+            display: none;
+        }
+        #resetAlarmBtn:hover {
+            background-color: #c82333;
+        }
+        #status {
+            padding: 10px;
+            margin-top: 10px;
+            border-radius: 5px;
+        }
+        .connected {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .disconnected {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .alarm {
+            background-color: #dc3545;
+            color: white;
+            animation: blink 1s infinite;
+        }
+        @keyframes blink {
+            50% { opacity: 0.8; }
+        }
+        #soundToggle {
+            margin-top: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Man Down Monitor</h1>
+        <div id="status" class="disconnected">Status: Disconnected</div>
+        <button id="connectBtn">Connect Device</button>
+        <button id="resetAlarmBtn" style="display: none;">Reset Alarm</button>
+        <div id="batteryLevel" style="text-align: center; margin-top: 10px;">
+            Batteria: --
+        </div>
+    </div>
+
+    <!-- Audio element for alarm sound -->
+
+    <audio id="alarmSound" loop>
+
+        <source src="/mandown_webapp/sound/alarm.mp3" type="audio/mpeg">
+    </audio>
+
+    <audio id="connectionSound">
+        <source src="/mandown_webapp/sound/connection.mp3" type="audio/mpeg">
+    </audio>
+
+    <audio id="disconnectionSound">
+        <source src="/mandown_webapp/sound/disconnection.mp3" type="audio/mpeg">
+    </audio>
+
+    <audio id="criticalSound" loop>
+        <source src="/mandown_webapp/sound/critical.mp3" type="audio/mpeg">
+    </audio>
+
+    <script src="/mandown_webapp/app.js"></script>
+
+     <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/mandown_webapp/sw.js')
+                    .then(registration => {
+                        console.log('ServiceWorker registrato con successo:', registration.scope);
+                    })
+                    .catch(error => {
+                        console.log('Registrazione ServiceWorker fallita:', error);
+                    });
+            });
+        }
+    </script>
+</body>
+</html>
+
+
+   

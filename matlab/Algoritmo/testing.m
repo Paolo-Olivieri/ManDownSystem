@@ -1,0 +1,378 @@
+% Rispetto ad "Algoritmo 3"
+%
+% Modifica dell'algoritmo tramite creazione di una FSM (Finite State
+% Machine).
+
+% Modifica relativa all'identificazione della variazione di pressione post
+% caduta: invece di considerare la variazione tra la media di pressione negli ultimi 5 secondi
+% della recovery area e la media di pressione nella PostTransition, è
+% meglio identificare la variazione di pressione tra l'istante corrente e
+% la media nella PostTransition. In questo modo, una volta identificato un
+% "Recovery", l'algoritmo riparte da quello specifico istante, e non dopo
+% l'intera recovery area
+
+% Modifica della condizione di rilevamento di caduta tramite utilizzo della
+% varianza var(acc(postTransition_start_index:postTransition_end_index)) <= th_var
+% (e della variazione di pressione).
+% Questo riduce anche il numero di falsi negativi: talvolta i valori di
+% accelerazione possono eccedere dai limiti imposti dalle soglie th_still
+% nell'area di postTransition a causa dell'assestamento dell'accelerometro.
+% L'utilizzo della varianza migliora il tutto.
+
+% VERSIONE 0.2
+
+%% INIT
+clc;
+clear;
+close all;
+set(0,'DefaultLineLineWidth', 1.5);
+set(0,'defaultAxesFontSize', 20);
+set(0,'DefaultFigureWindowStyle', 'docked');
+set(0,'defaulttextInterpreter','latex');
+rng('default');
+
+addpath '/Users/paolo/Desktop/ProgettoTesi/matlabManDown_Thesis/matlabManDown_Thesis';
+load('/Users/paolo/Desktop/ProgettoTesi/matlabManDown_Thesis/matlabManDown_Thesis/Training/prctile.mat');
+
+
+%% LOAD DATA
+%folderPath = '/Users/paolo/Desktop/ProgettoTesi/matlabManDown_Thesis/matlabManDown_Thesis/Test/Fall&Recovery';
+%olderPath = '/Users/paolo/Desktop/ProgettoTesi/matlabManDown_Thesis/matlabManDown_Thesis/Test/Fall&Rest';
+%folderPath = '/Users/paolo/Desktop/ProgettoTesi/matlabManDown_Thesis/matlabManDown_Thesis/Test/LateralFall';
+%folderPath = '/Users/paolo/Desktop/ProgettoTesi/matlabManDown_Thesis/matlabManDown_Thesis/Test/BackwardFall';
+%folderPath = '/Users/paolo/Desktop/ProgettoTesi/matlabManDown_Thesis/matlabManDown_Thesis/Test/VerticalFall';
+%folderPath = '/Users/paolo/Desktop/ProgettoTesi/matlabManDown_Thesis/matlabManDown_Thesis/Test/BendOver';
+%folderPath = '/Users/paolo/Desktop/ProgettoTesi/matlabManDown_Thesis/matlabManDown_Thesis/Test/Crouch';
+%folderPath = '/Users/paolo/Desktop/ProgettoTesi/matlabManDown_Thesis/matlabManDown_Thesis/Test/Elevator';
+%folderPath = '/Users/paolo/Desktop/ProgettoTesi/matlabManDown_Thesis/matlabManDown_Thesis/Test/Sit';
+folderPath = '/Users/paolo/Desktop/ProgettoTesi/matlabManDown_Thesis/matlabManDown_Thesis/Test/Stairs';
+%folderPath = '/Users/paolo/Desktop/ProgettoTesi/matlabManDown_Thesis/matlabManDown_Thesis/Test/Strambling';
+%folderPath = '/Users/paolo/Desktop/ProgettoTesi/matlabManDown_Thesis/matlabManDown_Thesis/Test/Walk';
+countCorrect = 0;
+countIncorrect = 0;
+
+vecCorrect = [];
+vecIncorrect = [];
+pressure_slope_vec = [];
+
+countAlarmTriggered = 0;
+
+%% THRESHOLDS AND TIME INTERVALS
+    valley_threshold = 0.74883;                                 %[g]
+    peak_threshold = 1.6489;                                  %[g]
+    pressure_fall_threshold = 0.07;                         %[hPa]
+    max_still_threshold = 1.08;                             %[g]
+    min_still_threshold = 0.92;                             %[g]
+    pressure_getUp_threshold = pressure_fall_threshold;     %[hPa]
+    peak_window_time = 2;                                   %[s]
+    recovery_window_time = 60;                              %[s]
+    variance_threshold= 0.0015;                              %[g] Ricava da th_variance relativa ai test "LyingMovement"
+
+
+
+for k = 1:20
+
+    fprintf("\n-------- TEST %d --------\n",k);
+    % Nome del file CSV
+    %csvName = sprintf('fall&recovery%d.csv', k);
+    %csvName = sprintf('verticalFall%d.csv', k);
+    %csvName = sprintf('fall&rest%d.csv', k);
+    %csvName = sprintf('lateralFall%d.csv', k);
+    %csvName = sprintf('backwardFall%d.csv', k);
+    %csvName = sprintf('crouch%d.csv', k);
+    %csvName = sprintf('elevator%d.csv', k);
+    %csvName = sprintf('sit%d.csv', k);
+    csvName = sprintf('stairs%d.csv', k);
+    %csvName = sprintf('strambling%d.csv', k);
+    %csvName = sprintf('walk%d.csv', k);
+            
+
+    % Percorso completo del file
+    csvPath = fullfile(folderPath, csvName); % fullfile per costruire il percorso
+
+    % Dati dal file CSV
+    data = readtable(csvPath); % Leggo il CSV usando il percorso completo
+
+    acc = data.AccMagnitude;
+    pressure = data.Pressure;
+    time = data.Timestamp_Matlab;
+
+
+    %% FSM Initialization
+    stato = 'Iniziale';
+    fall_alert = false;
+    fall_motionless = false;
+    fall_recovered = false;
+
+    i = 1;
+    while i <= length(acc)
+        switch stato
+            case 'Iniziale'
+                % Step 1: Verifica se si presenta una valle (indice di possibile esistenza di picco)
+                if acc(i) <= valley_threshold
+
+                    % FInestra temporale entro cui si cerca un picco (impatto)
+                    peak_window_end = min(i + round(peak_window_time / mean(diff(time))), length(acc));
+                    stato = 'Possibile Caduta';
+                else
+                    i = i + 1;
+                end
+
+            case 'Possibile Caduta'
+                % Step 2: Cerca picco massimo entro finestra di tempo
+                if any(acc(i:peak_window_end) >= peak_threshold)
+
+                    [peak_value, peak_relative_index] = max(acc(i:peak_window_end));
+                    peak_index = peak_relative_index + i - 1;
+                    valley_indices = find(acc(i:peak_index) <= valley_threshold) + i - 1;
+
+                    % Estrazione della valle minima e individuazione delle
+                    % regioni pre-transition e post-transition
+                    if ~isempty(valley_indices)
+                        [valley_value, min_valley_index] = min(acc(valley_indices));
+                        valley_index = valley_indices(min_valley_index);
+
+                        % Timestamp picco e valle
+                        time_peak = time(peak_index);
+                        time_valley = time(valley_index);
+
+                        % Timestamp e indice TransitionTime
+                        TT_time = (time_peak + time_valley)/2;
+                        TT_index = round(peak_index + valley_index)/2;
+
+                        % Pre-TT: regione precedente alla caduta
+                        preTransition_start = max(TT_time-3,0);
+                        preTransition_end = max(TT_time-1,0);
+                        preTransition_start_index = max(round(TT_index - 3/mean(diff(time))),0);
+                        preTransition_end_index = max(round(TT_index - 1/mean(diff(time))),0);
+
+                        % Post-TT: regione successiva alla caduta
+                        postTransition_start = min(TT_time+1,time(length(acc)));
+                        postTransition_end = min(TT_time+3,time(length(acc)));
+                        postTransition_start_index = min(round(TT_index + 1/mean(diff(time))),length(acc));
+                        postTransition_end_index = min(round(TT_index + 3/mean(diff(time))),length(acc));
+
+                        % Estrazione vettori di pressione nelle regioni
+                        % preTransition_pressure = pressure(time >= preTransition_start & time <= preTransition_end);
+                        % postTransition_pressure = pressure(time >= postTransition_start & time <= postTransition_end);
+                        preTransition_pressure = pressure(time >= preTransition_start & time <= preTransition_end);
+                        postTransition_pressure = pressure(time >= postTransition_start & time <= postTransition_end);
+
+                        % Calcolo della media di pressione in ciascuna regione
+                        meanPressure_preTransition = mean(preTransition_pressure);
+                        meanPressure_postTransition = mean(postTransition_pressure);
+
+
+                        % Calcolo di variazione di pressione tra le due regioni
+                        delta_pressure_fall = meanPressure_postTransition - meanPressure_preTransition;
+                        fprintf("Pressure variation: %.4f\n",delta_pressure_fall);
+
+                        pressure_slope = (pressure(peak_index) - pressure(valley_index)) / (time_peak-time_valley);
+                        pressure_slope_vec = [pressure_slope_vec,pressure_slope];
+                        
+
+                        % Se il deltaPressione supera una soglia e
+                        % l'accelerazione è compresa tra due soglie che
+                        % indicano che il soggetto è fermo, allora viene
+                        % confermata la caduta
+                        if delta_pressure_fall >= pressure_fall_threshold && ...
+                                var(acc(postTransition_start_index:postTransition_end_index)) <= variance_threshold
+                            %(all(acc(postTransition_end_index:min(postTransition_end_index+round(1/mean(diff(time))),length(acc))) <= th_max_still) && ...
+                            %all(acc(postTransition_end_index:min(postTransition_end_index+round(1/mean(diff(time))),length(acc))) >= th_min_still))
+                            % (all(acc(postTransition_end_index - round(1/mean(diff(time))):min(postTransition_end_index+round(2/mean(diff(time))),length(acc))) <= th_max_still) && ...
+                            %  all(acc(postTransition_end_index - round(1/mean(diff(time))):min(postTransition_end_index+round(2/mean(diff(time))),length(acc))) >= th_min_still))
+                            
+                            % Utile per i plot, in modo da visualizzare le
+                            % regioni quando effettivamente vi è una caduta
+                            
+
+                            fprintf("PostTT variance: %.8f\n",var(acc(postTransition_start_index:postTransition_end_index)));
+
+                            preTransition_start_fall = preTransition_start;
+                            preTransition_end_fall = preTransition_end;
+
+                            postTransition_start_fall = postTransition_start;
+                            postTransition_end_fall = postTransition_end;
+
+
+                            meanPressure_postFall = meanPressure_postTransition;
+                            meanPressure_preFall = meanPressure_preTransition;
+
+                            impact_value = acc(peak_index);
+                            impact_time = time(peak_index);
+
+                            min_valley_value = acc(valley_index);
+                            min_valley_time = time(valley_index);
+
+                            % disp(meanPressure_preTransition )
+                            % disp(meanPressure_postTransition )
+                            % disp(delta_pressure_fall)
+
+                            stato = 'Caduta Confermata';
+                        else
+                            stato = 'Iniziale';
+                            i = i + 1;
+                        end
+                    else
+                        stato = 'Iniziale';
+                        i = i + 1;
+                    end
+
+                else
+                    stato = 'Iniziale';
+                    i = i + 1;
+                end
+
+            case 'Caduta Confermata'
+
+                fprintf('A %.2f m fall was detected at %.2f sec with an impact of %.2f g\n',(delta_pressure_fall/0.12), TT_time, impact_value);
+
+                % Indice del termine della finestra di recovery
+                recovery_window_end = min(postTransition_end_index + round(recovery_window_time / mean(diff(time))), length(acc));
+
+                % Se almeno un'accelerazione eccede i limiti della soglia di
+                % immobilità, allora il soggetto si è mosso o si muove
+                if any(acc(postTransition_end_index:recovery_window_end) >= max_still_threshold) || ...
+                        any(acc(postTransition_end_index:recovery_window_end) <= min_still_threshold)
+
+                    window_2sec = round(2/mean(diff(time)));  % Finestra di 2 secondi
+
+                    j = postTransition_end_index;
+
+                    while (j + window_2sec - 1 <= recovery_window_end && ~fall_recovered)
+                        % Calcolare la media della pressione nella finestra di 2 secondi
+                        pressure_mean_2sec = mean(pressure(j:j + window_2sec - 1));
+
+                        % Calcolare la differenza di pressione per la finestra corrente
+                        delta_pressure_recovery = meanPressure_postTransition - pressure_mean_2sec;
+
+                        if (delta_pressure_recovery >= pressure_getUp_threshold)
+                            % Recupero rilevato
+                            fall_alert = false;
+                            fall_motionless = false;
+                            fall_recovered = true;
+                            i = j + window_2sec - 1 ;
+                            stato = 'Iniziale';
+                            fprintf('Recovered from fall between %.2f sec and %.2f sec\n', time(j),time(j+window_2sec-1));
+                            break;
+                        end
+
+                        % Avanza di un campione per scorrere la finestra
+                        j = j + 1;
+                    end
+
+                    % Se non è stato rilevato nessun recupero tramite variazione di pressione
+                    if ~fall_recovered
+                        fall_alert = true;
+                        fall_motionless = false;
+                        stato = 'Allerta';
+                        fprintf('Fallen but still moving slightly\n');
+                    end
+
+                else
+                    fall_alert = true;
+                    fall_motionless = true;
+                    fprintf('Fallen and motionless\n');
+                    stato = 'Allerta';
+                end
+
+            case 'Allerta'
+                if fall_alert
+                    if fall_motionless
+                        fprintf('FALL ALERT TRIGGERED: MOTIONLESS PERSON (Test %d)\n',k);
+                        stato = 'Fine';
+                    else
+                        fprintf('FALL ALERT TRIGGERED: MOVING PERSON (Test %d)\n',k);
+                        stato = 'Fine';
+                    end
+                end
+
+
+            case 'Fine'
+                disp('Assistance notified');
+                break;
+
+            otherwise
+                stato = 'Iniziale';
+                i = i + 1;
+        end
+    end
+
+    if ~fall_alert
+        fprintf('NO FALL ALERT TRIGGERED (Test %d)\n',k);
+    end
+
+
+
+    
+
+end
+
+
+if fall_alert || fall_recovered
+    figure;
+    subplot(2,1,1);
+    plot(impact_time, impact_value, 'rx', 'MarkerFaceColor', 'r', 'MarkerSize', 15, 'DisplayName','Impact'); % Triangolo rosso
+    hold on;
+    plot(min_valley_time, min_valley_value,  'v', 'MarkerFaceColor', 'r', 'MarkerSize', 10, 'DisplayName','Valley'); % Triangolo rosso
+    plot(time, acc, 'b', 'DisplayName', 'Acceleration Magnitude');
+
+
+    % Regioni
+    fill([preTransition_start_fall preTransition_start_fall preTransition_end_fall preTransition_end_fall], ...
+        [(valley_value - 0.2) (peak_value + 0.2) (peak_value + 0.2) (valley_value - 0.2)], ...
+        'g', 'FaceAlpha', 0.3, 'EdgeColor', 'k', 'DisplayName', 'Pre-Transition Time Region');
+
+    fill([postTransition_start_fall postTransition_start_fall postTransition_end_fall postTransition_end_fall], ...
+        [(valley_value - 0.2) (peak_value + 0.2) (peak_value + 0.2) (valley_value - 0.2)], ...
+        'g', 'FaceAlpha', 0.3, 'EdgeColor', 'k', 'DisplayName', 'Post-Transition Time Region');
+
+    fill([postTransition_end_fall postTransition_end_fall time(recovery_window_end) time(recovery_window_end)], ...
+        [(valley_value - 0.2) (peak_value + 0.2) (peak_value + 0.2) (valley_value - 0.2)], ...
+        'c', 'FaceAlpha', 0.3, 'EdgeColor', 'k', 'DisplayName', 'Recovery Area');
+
+
+    yline(valley_threshold,'LineStyle','--','Color','k','LineWidth',1.5, ...
+        'Label','Valley Threshold','LabelHorizontalAlignment','left','LabelVerticalAlignment','bottom','FontSize',14,'DisplayName','Valley threshold');
+    yline(peak_threshold,'LineStyle','--','Color','k','LineWidth',1.5, ...
+        'Label','Peak Threshold','LabelHorizontalAlignment','left','LabelVerticalAlignment','top','FontSize',14, 'DisplayName','Peak threshold');
+    yline(max_still_threshold,'LineStyle','--','Color','r','LineWidth',1.5, ...
+        'Label','Max Movement Threshold','LabelHorizontalAlignment','left','LabelVerticalAlignment','top','FontSize',14, 'DisplayName','Max Still threshold');
+    yline(min_still_threshold,'LineStyle','--','Color','r','LineWidth',1.5, ...
+        'Label','Min Movement Threshold','LabelHorizontalAlignment','left','LabelVerticalAlignment','top','FontSize',14, 'DisplayName','Min Still threshold');
+    hold off;
+    xlabel('Timestamp');
+    ylabel('Magnitudine dell''accelerazione');
+    title('Plot della magntiude dell''accelerazione');
+    legend('Location','eastoutside');
+    grid on;
+
+
+
+
+    subplot(2,1,2);
+    plot(time, pressure, 'b', 'DisplayName', 'Pressure');
+    axis([0 time(length(acc)) meanPressure_preFall-0.2 meanPressure_postFall+0.2]);
+    hold on;
+
+    % Regioni
+    fill([preTransition_start_fall preTransition_start_fall preTransition_end_fall preTransition_end_fall], ...
+        [(meanPressure_preFall-0.1) (meanPressure_postFall+0.1) (meanPressure_postFall+0.1) (meanPressure_preFall-0.1)], ...
+        'g', 'FaceAlpha', 0.3, 'EdgeColor', 'k', 'DisplayName', 'Pre-Transition Time Region');
+
+    fill([postTransition_start_fall postTransition_start_fall postTransition_end_fall postTransition_end_fall], ...
+        [(meanPressure_preFall-0.1) (meanPressure_postFall+0.1) (meanPressure_postFall+0.1) (meanPressure_preFall-0.1)], ...
+        'g', 'FaceAlpha', 0.3, 'EdgeColor', 'k', 'DisplayName', 'Post-Transition Time Region');
+
+    fill([postTransition_end_fall postTransition_end_fall time(recovery_window_end) time(recovery_window_end)], ...
+        [(meanPressure_preFall-0.1) (meanPressure_postFall+0.1) (meanPressure_postFall+0.1) (meanPressure_preFall-0.1)], ...
+        'c', 'FaceAlpha', 0.3, 'EdgeColor', 'k', 'DisplayName', 'Recovery Area');
+
+
+    xlabel('Timestamp');
+    ylabel('Pressione');
+    title('Plot della pressione');
+    legend('Location','eastoutside');
+    grid on;
+
+end
