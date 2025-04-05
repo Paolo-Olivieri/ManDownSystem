@@ -4,8 +4,8 @@
         const BATTERY_SERVICE_UUID = '0000180f-0000-1000-8000-00805f9b34fb';  
         const BATTERY_CHARACTERISTIC_UUID = '00002a19-0000-1000-8000-00805f9b34fb'; 
 
-        const BOT_TOKEN = '7795056451:AAEeJD6Dg7s1WL2hB8JeSNCMZdtqOZNcMaM';
-        const CHAT_ID = '-4600073095'; 
+        const BOT_TOKEN = 'YOUR_BOT_TOKEN';
+        const CHAT_ID = 'YOUR_CHAT_ID'; 
         
         let fallCharacteristic = null;
         let device = null;
